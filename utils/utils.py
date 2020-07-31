@@ -14,7 +14,7 @@ from torch import nn
 from torch.nn.init import _calculate_fan_in_and_fan_out, _no_grad_normal_
 from torchvision.ops.boxes import batched_nms
 
-from utils.sync_batchnorm import SynchronizedBatchNorm2d
+from .sync_batchnorm import SynchronizedBatchNorm2d
 
 
 def invert_affine(metas: Union[float, list, tuple], preds):
@@ -22,7 +22,7 @@ def invert_affine(metas: Union[float, list, tuple], preds):
         if len(preds[i]['rois']) == 0:
             continue
         else:
-            if metas is float:
+            if isinstance(metas, float):
                 preds[i]['rois'][:, [0, 2]] = preds[i]['rois'][:, [0, 2]] / metas
                 preds[i]['rois'][:, [1, 3]] = preds[i]['rois'][:, [1, 3]] / metas
             else:
@@ -88,9 +88,13 @@ def preprocess_video(*frame_from_video, max_size=512, mean=(0.406, 0.456, 0.485)
 
 
 def postprocess(x, anchors, regression, classification, regressBoxes, clipBoxes, threshold, iou_threshold):
+    # (1, A, 4), (N, A, 4) --> (N, A, 4)
     transformed_anchors = regressBoxes(anchors, regression)
+    # (N, A, 4), IMG --> (N, A, 4)
     transformed_anchors = clipBoxes(transformed_anchors, x)
-    scores = torch.max(classification, dim=2, keepdim=True)[0]
+    # (N, A, C) --> (N, A, 1)
+    scores, _ = torch.max(classification, dim=2, keepdim=True)
+    # (N, A, 1) --> (N, A, 1) --> (N, A)
     scores_over_thresh = (scores > threshold)[:, :, 0]
     out = []
     for i in range(x.shape[0]):
@@ -102,16 +106,21 @@ def postprocess(x, anchors, regression, classification, regressBoxes, clipBoxes,
             })
             continue
 
-        classification_per = classification[i, scores_over_thresh[i, :], ...].permute(1, 0)
-        transformed_anchors_per = transformed_anchors[i, scores_over_thresh[i, :], ...]
-        scores_per = scores[i, scores_over_thresh[i, :], ...]
+        # (N, A, C) --> (S, C) --> (C, S)
+        classification_per = classification[i, scores_over_thresh[i]].permute(1, 0)
+        # (N, A, 4) --> (S, 4)
+        transformed_anchors_per = transformed_anchors[i, scores_over_thresh[i]]
+        # (N, A, 1) --> (S,)
+        scores_per = scores[i, scores_over_thresh[i], 0]
+        # (C, S) --> (S,), (S,)
         scores_, classes_ = classification_per.max(dim=0)
-        anchors_nms_idx = batched_nms(transformed_anchors_per, scores_per[:, 0], classes_, iou_threshold=iou_threshold)
+        # (S,), (S,), (S,), float --> (M,)
+        anchors_nms_idx = batched_nms(transformed_anchors_per, scores_per, classes_, iou_threshold=iou_threshold)
 
         if anchors_nms_idx.shape[0] != 0:
             classes_ = classes_[anchors_nms_idx]
             scores_ = scores_[anchors_nms_idx]
-            boxes_ = transformed_anchors_per[anchors_nms_idx, :]
+            boxes_ = transformed_anchors_per[anchors_nms_idx]
 
             out.append({
                 'rois': boxes_.cpu().numpy(),

@@ -3,8 +3,8 @@
 import torch
 from torch import nn
 
-from efficientdet.model import BiFPN, Regressor, Classifier, EfficientNet
-from efficientdet.utils import Anchors
+from .efficientdet.model import BiFPN, Regressor, Classifier, EfficientNet
+from .efficientdet.utils import Anchors
 
 
 class EfficientDetBackbone(nn.Module):
@@ -65,8 +65,6 @@ class EfficientDetBackbone(nn.Module):
                 m.eval()
 
     def forward(self, inputs):
-        max_size = inputs.shape[-1]
-
         _, p3, p4, p5 = self.backbone_net(inputs)
 
         features = (p3, p4, p5)
@@ -76,7 +74,7 @@ class EfficientDetBackbone(nn.Module):
         classification = self.classifier(features)
         anchors = self.anchors(inputs, inputs.dtype)
 
-        return features, regression, classification, anchors
+        return features, classification, regression, anchors
 
     def init_backbone(self, path):
         state_dict = torch.load(path)
